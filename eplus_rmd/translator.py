@@ -157,7 +157,7 @@ class Translator:
 
         self.building = {'id': self.get_building_name(),
                          'notes': 'this file contains only a single building',
-                         'building_open_schedule': 'always_1',
+                         'building_open_schedule': 'ALWAYS ON DISCRETE',
                          'has_site_shading': self.is_site_shaded(),
                          'building_segments': [self.building_segment, ]}
 
@@ -803,12 +803,11 @@ class Translator:
                                     hvac_system = hvac_system_list[0]
                                 else:
                                     hvac_system = {'id': hvac_name}
+                                    hvac_systems.append(hvac_system)
                                 if heating_system:
                                     hvac_system['heating_system'] = heating_system
                                 if cooling_system:
                                     hvac_system['cooling_system'] = cooling_system
-                                # print(hvac_system)
-                                hvac_systems.append(hvac_system)
                                 for zone in zone_name_list:
                                     terminal = {
                                         'id': zone + '-terminal',
