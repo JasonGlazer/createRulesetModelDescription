@@ -1343,6 +1343,163 @@ class Translator:
         self.model_description['pumps'] = pumps
         return pumps
 
+    def add_simulation_outputs(self):
+        source_map = {'Electricity': 'ELECTRICITY',
+                      'Natural Gas': 'NATURAL_GAS',
+                      'Gasoline': 'OTHER',
+                      'Diesel': 'OTHER',
+                      'Coal': 'OTHER',
+                      'Fuel Oil No 1': 'FUEL_OIL',
+                      'Fuel Oil No 2': 'FUEL_OIL',
+                      'Propane': 'PROPANE',
+                      'Other Fuel 1': 'OTHER',
+                      'Other Fuel 2': 'OTHER',
+                      'District Cooling': 'OTHER',
+                      'District Heating Water': 'OTHER',
+                      'District Heating Steam': 'OTHER',
+                      'Water': 'OTHER'}
+        enduse_map = {'Heating': 'SPACE_HEATING',
+                      'Cooling': 'SPACE_COOLING',
+                      'Interior Lighting': 'INTERIOR_LIGHTING',
+                      'Exterior Lighting': 'EXTERIOR_LIGHTING',
+                      'Interior Equipment': 'MISC_EQUIPMENT',
+                      'Exterior Equipment': 'OTHER',
+                      'Fans': 'FANS_INTERIOR_VENTILATION',
+                      'Pumps': 'PUMPS',
+                      'Heat Rejection': 'HEAT_REJECTION',
+                      'Humidification': 'HUMIDIFICATION',
+                      'Heat Recovery': 'HEAT_RECOVERY',
+                      'Water Systems': 'SERVICE_WATER_HEATING',
+                      'Refrigeration': 'REFRIGERATION_EQUIPMENT',
+                      'Generators': 'OTHER'}
+        meter_map = {'Heating': 'Heating',
+                     'Cooling': 'Cooling',
+                     'Interior Lighting': 'InteriorLights',
+                     'Exterior Lighting': 'ExteriorLights',
+                     'Interior Equipment': 'InteriorEquipment',
+                     'Exterior Equipment': 'OTHER',
+                     'Fans': 'Fans',
+                     'Pumps': 'Pumps',
+                     'Heat Rejection': 'HeatRejection',
+                     'Humidification': 'Humidification',
+                     'Heat Recovery': 'HeatRecovery',
+                     'Water Systems': 'WaterSystem',
+                     'Refrigeration': 'Refrigeration',
+                     'Generators': 'Generators'}
+        simulation_output = {}
+        abups_enduse_table = self.get_table('AnnualBuildingUtilityPerformanceSummary', 'End Uses')
+        if not abups_enduse_table:
+            return simulation_output
+        abups_enduse_rows = abups_enduse_table['Rows']
+        abups_enduse_cols = abups_enduse_table['Cols']
+        demand_enduse_table = self.get_table('DemandEndUseComponentsSummary', 'End Uses')
+        if not demand_enduse_table:
+            return simulation_output
+        demand_enduse_rows = demand_enduse_table['Rows']
+        #  demand_enduse_cols = demand_enduse_table['Cols']
+        meters_elec_table = self.get_table('EnergyMeters', 'Annual and Peak Values - Electricity')
+        if not meters_elec_table:
+            return simulation_output
+        meters_elec_rows = meters_elec_table['Rows']
+        meters_elec_cols = meters_elec_table['Cols']
+        meters_elec_max_col = meters_elec_cols.index('Electricity Maximum Value [W]')
+        meters_gas_table = self.get_table('EnergyMeters', 'Annual and Peak Values - Natural Gas')
+        if not meters_gas_table:
+            return simulation_output
+        meters_gas_rows = meters_gas_table['Rows']
+        meters_gas_cols = meters_gas_table['Cols']
+        meters_gas_max_col = meters_gas_cols.index('Natural Gas Maximum Value [W]')
+
+        source_results = []
+        end_use_results = []
+        for col in abups_enduse_cols:
+            consumption = float(abups_enduse_rows['Total End Uses'][abups_enduse_cols.index(col)])
+            demand = float(demand_enduse_rows['Total End Uses'][abups_enduse_cols.index(col)])  # must be same order
+            source = source_map[col.split(' [', 1)[0]]
+            if consumption > 0 and 'Water' not in col:
+                source_result = {
+                    'id': 'source_results_' + source,
+                    'energy_source': source,
+                    'annual_consumption': consumption,
+                    'annual_demand': demand,
+                    'annual_cost': -1.,
+                }
+                source_results.append(source_result)
+
+            for row in abups_enduse_rows:
+                if row != 'Total End Uses' and row != '':
+                    consumption = float(abups_enduse_rows[row][abups_enduse_cols.index(col)])
+                    conincident_demand = float(demand_enduse_rows[row][abups_enduse_cols.index(col)])
+                    if consumption > 0 and 'Water' not in row:
+                        end_use_result = {
+                            'id': 'end_use_' + source + '-' + row,
+                            'type': enduse_map[row],
+                            'energy_source': source,
+                            'annual_site_energy_use': consumption,
+                            'annual_site_coincident_demand': conincident_demand,
+                            'annual_site_non_coincident_demand': -1.,
+                            'is_regulated': True
+                        }
+                        if source == 'ELECTRICITY':
+                            end_use_meter_name = meter_map[row] + ':Electricity'
+                            if end_use_meter_name in meters_elec_rows:
+                                noncoincident_demand = float(meters_elec_rows[end_use_meter_name][meters_elec_max_col])
+                                end_use_result['annual_site_non_coincident_demand'] = noncoincident_demand
+                        elif source == 'NATURAL_GAS':
+                            end_use_meter_name = meter_map[row] + ':NaturalGas'
+                            if end_use_meter_name in meters_gas_rows:
+                                noncoincident_demand = float(meters_gas_rows[end_use_meter_name][meters_gas_max_col])
+                                end_use_result['annual_site_non_coincident_demand'] = noncoincident_demand
+
+                        end_use_results.append(end_use_result)
+
+        ea_advisory_messages_table = self.get_table('LEEDsummary', 'EAp2-2. Advisory Messages')
+        if not ea_advisory_messages_table:
+            return simulation_output
+        ea_rows = ea_advisory_messages_table['Rows']
+        ea_cols = ea_advisory_messages_table['Cols']
+        ea_data_column = ea_cols.index('Data')
+
+        time_setpoint_not_met_table = self.get_table('SystemSummary', 'Time Setpoint Not Met')
+        if not time_setpoint_not_met_table:
+            return simulation_output
+        time_rows = time_setpoint_not_met_table['Rows']
+        time_cols = time_setpoint_not_met_table['Cols']
+        time_heat_occupied_column = time_cols.index('During Occupied Heating [hr]')
+        time_cool_occupied_column = time_cols.index('During Occupied Cooling [hr]')
+
+        output_instance = {}
+        if ea_advisory_messages_table and time_setpoint_not_met_table:
+            output_instance = {
+                'id': 'output_instance_1',
+                'ruleset_model_type': 'PROPOSED',
+                'rotation_angle': 0,
+                'unmet_load_hours': float(ea_rows['Number of hours not met'][ea_data_column]),
+                'unmet_load_hours_heating': float(ea_rows['Number of hours heating loads not met'][ea_data_column]),
+                'unmet_occupied_load_hours_heating': float(time_rows['Facility'][time_heat_occupied_column]),
+                'unmet_load_hours_cooling': float(ea_rows['Number of hours cooling loads not met'][ea_data_column]),
+                'unmet_occupied_load_hours_cooling': float(time_rows['Facility'][time_cool_occupied_column]),
+                'annual_source_results': source_results,
+                'building_peak_cooling_load': -1,
+                'annual_end_use_results': end_use_results
+            }
+
+        simulation_output = {
+            'id': 'output_1',
+            'output_instance': output_instance,
+            'performance_cost_index': -1.,
+            'baseline_building_unregulated_energy_cost': -1.,
+            'baseline_building_regulated_energy_cost': -1.,
+            'baseline_building_performance_energy_cost': -1.,
+            'total_area_weighted_building_performance_factor': -1.,
+            'performance_cost_index_target': -1.,
+            'total_proposed_building_energy_cost_including_renewable_energy': -1.,
+            'total_proposed_building_energy_cost_excluding_renewable_energy': -1.,
+            'percent_renewable_energy_savings': -1.
+        }
+        self.model_description['output'] = simulation_output
+        return simulation_output
+
     def ensure_all_id_unique(self):
         self.add_serial_number_nested(self.model_description, 'id')
 
@@ -1391,6 +1548,7 @@ class Translator:
         self.add_zones()
         self.add_spaces()
         self.add_exterior_lighting()
+        self.add_simulation_outputs()
         self.add_schedules()
         self.ensure_all_id_unique()
         passed, message = self.validator.validate_rmd(self.project_description)
